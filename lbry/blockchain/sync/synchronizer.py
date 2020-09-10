@@ -18,7 +18,6 @@ log = logging.getLogger(__name__)
 
 BLOCKS_INIT_EVENT = Event.add("blockchain.sync.blocks.init", "steps")
 BLOCKS_MAIN_EVENT = Event.add("blockchain.sync.blocks.main", "blocks", "txs")
-FILTER_INIT_EVENT = Event.add("blockchain.sync.filter.init", "steps")
 FILTER_MAIN_EVENT = Event.add("blockchain.sync.filter.main", "blocks")
 CLAIMS_INIT_EVENT = Event.add("blockchain.sync.claims.init", "steps")
 CLAIMS_MAIN_EVENT = Event.add("blockchain.sync.claims.main", "claims")
@@ -126,15 +125,24 @@ class BlockchainSync(Sync):
                 return starting_height, best_height_processed
 
     async def sync_filters(self):
-        if not self.conf.spv_address_filters:
-            return
+        # if not self.conf.spv_address_filters:
+        #     return
+        blocks = await self.db.run(block_phase.get_blocks_without_filters)
+        tasks = [[]]
+        for block_hash, height in blocks:
+            tasks[-1].append((block_hash, height))
+            if len(tasks[-1]) == 1000:
+                tasks.append([])
+        if len(tasks[-1]) == 0:
+            tasks.pop()
+
         with Progress(self.db.message_queue, FILTER_MAIN_EVENT) as p:
-            blocks = 0
-            tasks = []
-            # for chunk in range(select min(height), max(height) from block where filter is null):
-            #     tasks.append(self.db.run(block_phase.sync_filters, chunk, self.FILTER_FLUSH_SIZE))
-            p.start(blocks)
-            await self.run_tasks(tasks)
+            p.start(len(blocks))
+            if tasks:
+                await self.run_tasks([
+                    self.db.run(block_phase.sync_block_filters, batch)
+                    for batch in tasks
+                ])
 
     async def sync_spends(self, blocks_added):
         if blocks_added:
@@ -282,14 +290,13 @@ class BlockchainSync(Sync):
 
     async def advance(self):
         blocks_added = await self.sync_blocks()
-        sync_filters_task = asyncio.create_task(self.sync_filters())
-        sync_trends_task = asyncio.create_task(self.sync_trends())
         await self.sync_spends(blocks_added)
+        await self.sync_filters()
         initial_claim_sync = await self.sync_claims(blocks_added)
+        sync_trends_task = asyncio.create_task(self.sync_trends())
         await self.sync_supports(blocks_added)
         await self.sync_channel_stats(blocks_added, initial_claim_sync)
         await sync_trends_task
-        await sync_filters_task
         if blocks_added:
             await self._on_block_controller.add(BlockEvent(blocks_added[-1]))
 

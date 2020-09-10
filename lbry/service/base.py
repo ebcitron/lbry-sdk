@@ -157,6 +157,12 @@ class Service:
                     return account.address_managers[details['chain']]
         return None
 
+    async def get_block_address_filters(self):
+        raise NotImplementedError
+
+    async def get_transaction_address_filters(self, block_hash):
+        raise NotImplementedError
+
     async def reset(self):
         self.ledger.conf = {
             'auto_connect': True,
